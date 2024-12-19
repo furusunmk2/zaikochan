@@ -1,38 +1,16 @@
 from flask import Flask, request, abort
 from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
-from linebot.models import (
-    MessageEvent, TextMessage, TextSendMessage, TemplateSendMessage,
-    ButtonsTemplate, DatetimePickerTemplateAction, PostbackEvent
-)
-from sqlalchemy import create_engine, Column, Integer, String, DateTime
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker
-from dotenv import load_dotenv
-from datetime import datetime, timedelta, timezone
+from linebot.models import MessageEvent, TextMessage, TextSendMessage
+from datetime import datetime
+from collections import deque
 import os
+from dotenv import load_dotenv
 
 # .envファイルの読み込み
 load_dotenv()
 
-# データベースの設定
-DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///schedule.db")
-engine = create_engine(DATABASE_URL)
-Base = declarative_base()
-
-class Schedule(Base):
-    __tablename__ = 'schedules'
-    id = Column(Integer, primary_key=True)
-    user_id = Column(String, nullable=False)
-    message = Column(String, nullable=False)
-    scheduled_datetime = Column(DateTime, nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
-
-Base.metadata.create_all(engine)
-Session = sessionmaker(bind=engine)
-session = Session()
-
-# LINEの設定
+# LINE設定
 LINE_CHANNEL_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN")
 LINE_CHANNEL_SECRET = os.getenv("LINE_CHANNEL_SECRET")
 app = Flask(__name__)
@@ -42,6 +20,9 @@ if not LINE_CHANNEL_ACCESS_TOKEN or not LINE_CHANNEL_SECRET:
 
 line_bot_api = LineBotApi(LINE_CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(LINE_CHANNEL_SECRET)
+
+# 在庫データの管理（スタック型かつ辞書型）
+inventory = deque()
 
 @app.route("/callback", methods=['POST'])
 def callback():
@@ -58,149 +39,39 @@ def callback():
 
     return 'OK'
 
-# TextMessageイベントの処理
 @handler.add(MessageEvent, message=TextMessage)
 def handle_message(event):
     user_message = event.message.text.strip()
-    user_id = event.source.user_id
 
-    # 予定確認の場合
-    if user_message == "予定確認":
-        # 日時の計算
-        JST = timezone(timedelta(hours=9))
-        now_jst = datetime.now(JST)
-        today = now_jst
-        initial_date = today.replace(minute=0, second=0).strftime("%Y-%m-%dT")
+    # 在庫を追加
+    if user_message.lower() not in ["一覧", "削除"]:
+        JST = datetime.now().strftime("%Y-%m-%d")  # 日付だけを使用
+        inventory.append({"name": user_message, "date": JST})
+        reply_message = f"「{user_message}」を在庫に追加しました。"
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_message))
 
-        # 1年前と1年後の日時を計算
-        min_date = (today - timedelta(days=365)).strftime("%Y-%m-%dT")  # 1年前
-        max_date = (today + timedelta(days=365)).strftime("%Y-%m-%dT")  # 1年後
-
-        # 日時選択のためのアクションを送信
-        datetime_picker_action = DatetimePickerTemplateAction(
-            label="日付を選んでください",
-            data=f"action=check_schedule&user_id={user_id}",
-            mode="datetime",
-            initial=initial_date,
-            max=max_date,
-            min=min_date
-        )
-
-        template_message = TemplateSendMessage(
-            alt_text="日時選択メッセージ",
-            template=ButtonsTemplate(
-                text="確認したい日のスケジュールを選んでください",
-                actions=[datetime_picker_action]
-            )
-        )
-
-        try:
-            line_bot_api.push_message(user_id, template_message)
-        except Exception as e:
-            print(f"日時選択メッセージの送信エラー: {e}")
-
-    # 予定入力の場合
-    else:
-        # 日時の選択
-        JST = timezone(timedelta(hours=9))
-        now_jst = datetime.now(JST)
-        today = now_jst
-        initial_date = today.replace(minute=0, second=0).strftime("%Y-%m-%dT%H:%M")
-
-        # 1年前と1年後の日時を計算
-        min_date = (today - timedelta(days=365)).strftime("%Y-%m-%dT%H:%M")  # 1年前
-        max_date = (today + timedelta(days=365)).strftime("%Y-%m-%dT%H:%M")  # 1年後
-
-        # 日時選択のためのアクションを送信
-        datetime_picker_action = DatetimePickerTemplateAction(
-            label="予定の日時を選んでください",
-            data=f"action=schedule&user_message={user_message}",
-            mode="datetime",
-            initial=initial_date,
-            max=max_date,
-            min=min_date
-        )
-
-        template_message = TemplateSendMessage(
-            alt_text="予定日時選択メッセージ",
-            template=ButtonsTemplate(
-                text="予定の日時を選んでください",
-                actions=[datetime_picker_action]
-            )
-        )
-
-        try:
-            line_bot_api.push_message(user_id, template_message)
-        except Exception as e:
-            print(f"日時選択メッセージの送信エラー: {e}")
-
-# Postbackイベントの処理
-@handler.add(PostbackEvent)
-def handle_postback(event):
-    if "action=schedule" in event.postback.data:
-        # ユーザーメッセージと日時を取得
-        data_parts = event.postback.data.split("&")
-        user_message = None
-        for part in data_parts:
-            if part.startswith("user_message="):
-                user_message = part.split("=")[-1]
-        schedule_datetime = event.postback.params.get('datetime', '不明')
-
-        # データベースに保存
-        if user_message and schedule_datetime != '不明':
-            try:
-                schedule = Schedule(
-                    user_id=event.source.user_id,
-                    message=user_message,
-                    scheduled_datetime=datetime.fromisoformat(schedule_datetime)
-                )
-                session.add(schedule)
-                session.commit()
-                confirmation_message = TextSendMessage(
-                    text=f"{user_message} の予定を {schedule_datetime} に保存しました。"
-                )
-            except Exception as e:
-                session.rollback()
-                confirmation_message = TextSendMessage(
-                    text=f"データベース保存中にエラーが発生しました: {e}"
-                )
+    # 在庫一覧を表示
+    elif user_message.lower() == "一覧":
+        if inventory:
+            inventory_list = [
+                f"{index}: {item['name']}（登録日: {item['date']}"
+                for index, item in enumerate(inventory)
+            ]
+            reply_message = "\n".join(inventory_list)
         else:
-            confirmation_message = TextSendMessage(
-                text="無効なデータが入力されました。"
-            )
+            reply_message = "在庫はありません。"
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_message))
 
-        try:
-            line_bot_api.reply_message(event.reply_token, confirmation_message)
-        except Exception as e:
-            print(f"確認メッセージ送信時のエラー: {e}")
-    if "action=check_schedule" in event.postback.data:
-        # ユーザーが選んだ日付を取得
-        selected_date_str = event.postback.params.get('datetime', '不明')
-        if selected_date_str != '不明':
-            selected_date = datetime.fromisoformat(selected_date_str).date()
-
-            # 予定をデータベースから取得し、選択した日付と一致するかチェック
-            schedules = session.query(Schedule).filter(
-                Schedule.scheduled_datetime >= selected_date,
-                Schedule.scheduled_datetime < selected_date + timedelta(days=1)
-            ).order_by(Schedule.scheduled_datetime).all()
-
-            if schedules:
-                schedule_messages = [
-                    f"{schedule.scheduled_datetime.strftime('%H:%M')} - {schedule.message}" for schedule in schedules
-                ]
-                response_message = "\n".join(schedule_messages)
-            else:
-                response_message = "その日に予定はありません。"
-
-            confirmation_message = TextSendMessage(text=response_message)
+    # 在庫を削除
+    elif user_message.isdigit():
+        index = int(user_message)
+        if 0 <= index < len(inventory):
+            removed_item = inventory[index]
+            inventory.remove(removed_item)
+            reply_message = f"在庫「{removed_item['name']}」を削除しました。"
         else:
-            confirmation_message = TextSendMessage(text="日付の取得に失敗しました。")
-
-        try:
-            line_bot_api.reply_message(event.reply_token, confirmation_message)
-        except Exception as e:
-            print(f"確認メッセージ送信時のエラー: {e}")
+            reply_message = "指定された番号の在庫が見つかりません。"
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_message))
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))
