@@ -48,18 +48,25 @@ def convert_to_half_width(text):
 def handle_message(event):
     user_message = event.message.text.strip()
 
-    # 在庫を追加
-    if user_message.lower() not in ["一覧", "削除"]:
-        JST = datetime.now().strftime("%Y-%m-%d")  # 日付だけを使用
-        inventory.append({"name": user_message, "date": JST})
-        reply_message = f"「{user_message}」を在庫に追加しました。"
+    # 全角数字を半角数字に変換
+    normalized_message = convert_to_half_width(user_message)
+
+    # 在庫を削除
+    if normalized_message.isdigit():
+        index = int(normalized_message)
+        if 0 <= index < len(inventory):
+            removed_item = inventory[index]
+            inventory.remove(removed_item)
+            reply_message = f"在庫「{removed_item['name']}」を削除しました。"
+        else:
+            reply_message = "指定された番号の在庫が見つかりません。"
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_message))
 
     # 在庫一覧を表示
-    elif user_message.lower() == "一覧":
+    elif normalized_message.lower() == "一覧":
         if inventory:
             inventory_list = [
-                f"{index}: {item['name']}（登録日: {item['date']}"
+                f"{index}: {item['name']}（登録日: {item['date']})"
                 for index, item in enumerate(inventory)
             ]
             reply_message = "\n".join(inventory_list)
@@ -67,19 +74,11 @@ def handle_message(event):
             reply_message = "在庫はありません。"
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_message))
 
-    # 在庫を削除
+    # 在庫を追加
     else:
-        normalized_message = convert_to_half_width(user_message)
-        if normalized_message.isdigit():
-            index = int(normalized_message)
-            if 0 <= index < len(inventory):
-                removed_item = inventory[index]
-                inventory.remove(removed_item)
-                reply_message = f"在庫「{removed_item['name']}」を削除しました。"
-            else:
-                reply_message = "指定された番号の在庫が見つかりません。"
-        else:
-            reply_message = "削除するには番号を入力してください。"
+        JST = datetime.now().strftime("%Y-%m-%d")  # 日付だけを使用
+        inventory.append({"name": user_message, "date": JST})
+        reply_message = f"「{user_message}」を在庫に追加しました。"
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_message))
 
 if __name__ == "__main__":
