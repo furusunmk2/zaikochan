@@ -6,6 +6,7 @@ from datetime import datetime
 from collections import deque
 import os
 from dotenv import load_dotenv
+import unicodedata
 
 # .envファイルの読み込み
 load_dotenv()
@@ -39,6 +40,10 @@ def callback():
 
     return 'OK'
 
+# 全角数字を半角数字に変換する関数
+def convert_to_half_width(text):
+    return unicodedata.normalize('NFKC', text)
+
 @handler.add(MessageEvent, message=TextMessage)
 def handle_message(event):
     user_message = event.message.text.strip()
@@ -63,14 +68,18 @@ def handle_message(event):
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_message))
 
     # 在庫を削除
-    elif user_message.isdigit():
-        index = int(user_message)
-        if 0 <= index < len(inventory):
-            removed_item = inventory[index]
-            inventory.remove(removed_item)
-            reply_message = f"在庫「{removed_item['name']}」を削除しました。"
+    else:
+        normalized_message = convert_to_half_width(user_message)
+        if normalized_message.isdigit():
+            index = int(normalized_message)
+            if 0 <= index < len(inventory):
+                removed_item = inventory[index]
+                inventory.remove(removed_item)
+                reply_message = f"在庫「{removed_item['name']}」を削除しました。"
+            else:
+                reply_message = "指定された番号の在庫が見つかりません。"
         else:
-            reply_message = "指定された番号の在庫が見つかりません。"
+            reply_message = "削除するには番号を入力してください。"
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_message))
 
 if __name__ == "__main__":
