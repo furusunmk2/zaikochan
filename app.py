@@ -51,7 +51,7 @@ def handle_message(event):
     # 全角数字を半角数字に変換
     normalized_message = convert_to_half_width(user_message)
 
-    # 在庫を削除
+    # 在庫削除
     if normalized_message.isdigit():
         index = int(normalized_message)
         if 0 <= index < len(inventory):
@@ -61,9 +61,10 @@ def handle_message(event):
         else:
             reply_message = "指定された番号の在庫が見つかりません。"
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_message))
+        return  # 削除処理が完了したら終了
 
     # 在庫一覧を表示
-    elif normalized_message.lower() == "一覧":
+    if normalized_message.lower() == "一覧":
         if inventory:
             inventory_list = [
                 f"{index}: {item['name']}（登録日: {item['date']})"
@@ -73,13 +74,13 @@ def handle_message(event):
         else:
             reply_message = "在庫はありません。"
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_message))
+        return  # 一覧表示処理が完了したら終了
 
-    # 在庫を追加
-    else:
-        JST = datetime.now().strftime("%Y-%m-%d")  # 日付だけを使用
-        inventory.append({"name": user_message, "date": JST})
-        reply_message = f"「{user_message}」を在庫に追加しました。"
-        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_message))
+    # その他のメッセージは在庫として登録
+    JST = datetime.now().strftime("%Y-%m-%d")  # 日付だけを使用
+    inventory.append({"name": user_message, "date": JST})
+    reply_message = f"「{user_message}」を在庫に追加しました。"
+    line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_message))
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 6000))
